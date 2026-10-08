@@ -1,0 +1,585 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Production Clock – Control</title>
+<style>
+  :root {
+    --bg: #15171b;
+    --panel: #1f2228;
+    --panel2: #272b33;
+    --border: #353a44;
+    --text: #e8eaee;
+    --muted: #9aa1ad;
+    --accent: #4f8cff;
+    --ok: #3ccf74;
+    --warn: #ffb020;
+    --bad: #ff5a5a;
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; background: var(--bg); color: var(--text); font: 14px/1.4 "Segoe UI", system-ui, sans-serif; }
+  body { padding: 16px; }
+  h1 { font-size: 18px; margin: 0 0 12px; display: flex; align-items: center; gap: 12px; }
+  h1 .dot { width: 10px; height: 10px; border-radius: 50%; background: var(--bad); display: inline-block; }
+  h1 .dot.on { background: var(--ok); }
+  h2 { font-size: 14px; margin: 0; text-transform: uppercase; letter-spacing: 0.06em; color: var(--muted); }
+  .layout { display: grid; grid-template-columns: minmax(0, 1fr) minmax(320px, 520px); gap: 16px; align-items: start; }
+  @media (max-width: 980px) { .layout { grid-template-columns: 1fr; } .side { position: static !important; } }
+  .side { position: sticky; top: 16px; display: grid; gap: 16px; }
+  .card { background: var(--panel); border: 1px solid var(--border); border-radius: 10px; padding: 14px; margin-bottom: 16px; }
+  .card > h2 { margin-bottom: 10px; display: flex; align-items: center; justify-content: space-between; }
+  .grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(190px, 1fr)); gap: 10px 14px; }
+  .grid.two { grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); }
+  label.f { display: flex; flex-direction: column; gap: 4px; font-size: 12px; color: var(--muted); }
+  label.f > span { white-space: nowrap; }
+  label.chk { display: flex; align-items: center; gap: 8px; font-size: 13px; color: var(--text); cursor: pointer; }
+  input[type=text], input[type=number], input[type=datetime-local], input[type=time], select {
+    background: var(--panel2); color: var(--text); border: 1px solid var(--border); border-radius: 6px; padding: 6px 8px; font: inherit; width: 100%;
+  }
+  input[type=color] { width: 100%; height: 32px; padding: 2px; background: var(--panel2); border: 1px solid var(--border); border-radius: 6px; }
+  input[type=range] { width: 100%; }
+  .row { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+  .row > * { flex: 1 1 auto; }
+  .row > button { flex: 0 0 auto; }
+  button {
+    background: var(--panel2); color: var(--text); border: 1px solid var(--border); border-radius: 6px; padding: 7px 12px; font: inherit; cursor: pointer;
+  }
+  button:hover { border-color: var(--accent); }
+  button.primary { background: var(--accent); border-color: var(--accent); color: #fff; }
+  button.good { background: #1f6b3c; border-color: #2a8a4e; }
+  button.warnb { background: #7a4f00; border-color: #a16a00; }
+  button.danger { background: #6b1f1f; border-color: #8a2a2a; }
+  button.big { font-size: 16px; padding: 10px 18px; }
+  .sub { font-size: 12px; color: var(--muted); }
+  .val { font-variant-numeric: tabular-nums; }
+  .mono { font-family: Consolas, "Courier New", monospace; }
+  .status { display: grid; grid-template-columns: auto 1fr; gap: 4px 12px; font-size: 13px; }
+  .status dt { color: var(--muted); }
+  .status dd { margin: 0; }
+  .bigtime { font-size: 34px; font-weight: 700; font-variant-numeric: tabular-nums; letter-spacing: 0.02em; }
+  .remaining { font-size: 28px; font-weight: 700; font-variant-numeric: tabular-nums; }
+  .err { color: var(--bad); }
+  .ok { color: var(--ok); }
+  .preview { position: relative; width: 100%; aspect-ratio: 16 / 9; border: 1px solid var(--border); border-radius: 8px; overflow: hidden; }
+  .preview iframe { position: absolute; inset: 0; width: 100%; height: 100%; border: 0; background: transparent; }
+  .preview.bg-black { background: #000; }
+  .preview.bg-white { background: #fff; }
+  .preview.bg-green { background: #00b140; }
+  .preview.bg-blue { background: #0047bb; }
+  .preview.bg-checker {
+    background-color: #666;
+    background-image: linear-gradient(45deg, #999 25%, transparent 25%), linear-gradient(-45deg, #999 25%, transparent 25%),
+      linear-gradient(45deg, transparent 75%, #999 75%), linear-gradient(-45deg, transparent 75%, #999 75%);
+    background-size: 24px 24px; background-position: 0 0, 0 12px, 12px -12px, -12px 0;
+  }
+  .preview.bg-image { background-size: cover; background-position: center; }
+  .urls a { color: var(--accent); text-decoration: none; }
+  .urls div { margin: 2px 0; }
+  details { border-top: 1px solid var(--border); margin-top: 12px; padding-top: 10px; }
+  summary { cursor: pointer; color: var(--muted); font-size: 12px; text-transform: uppercase; letter-spacing: 0.06em; margin-bottom: 8px; }
+  .radio-row { display: flex; gap: 14px; flex-wrap: wrap; margin-bottom: 10px; }
+  .radio-row label { display: flex; align-items: center; gap: 6px; cursor: pointer; }
+  fieldset { border: 1px solid var(--border); border-radius: 8px; padding: 10px 12px 12px; margin: 0 0 10px; }
+  legend { font-size: 12px; color: var(--muted); padding: 0 6px; }
+  fieldset[disabled] { opacity: 0.45; }
+  .toast { position: fixed; right: 16px; bottom: 16px; background: var(--bad); color: #fff; padding: 10px 14px; border-radius: 8px; display: none; }
+</style>
+</head>
+<body>
+
+<h1><span id="connDot" class="dot"></span> Production Clock <span class="sub" id="clientCount"></span></h1>
+
+<div class="layout">
+<div class="main">
+
+  <!-- ---------------- Time source ---------------- -->
+  <section class="card">
+    <h2>Time source</h2>
+    <div class="radio-row">
+      <label><input type="radio" name="tsmode" data-path="timeSource.mode" value="system"> This PC's clock</label>
+      <label><input type="radio" name="tsmode" data-path="timeSource.mode" value="ntp"> Internet time (NTP)</label>
+      <label><input type="radio" name="tsmode" data-path="timeSource.mode" value="manual"> Set manually</label>
+    </div>
+
+    <fieldset id="fsNtp">
+      <legend>NTP</legend>
+      <div class="grid">
+        <label class="f"><span>Server</span>
+          <input type="text" list="ntpHosts" data-path="timeSource.ntpHost" data-event="change" placeholder="time.windows.com">
+          <datalist id="ntpHosts">
+            <option value="time.windows.com"><option value="time.nist.gov"><option value="time.google.com">
+            <option value="time.cloudflare.com"><option value="pool.ntp.org"><option value="time.apple.com">
+          </datalist>
+        </label>
+        <label class="f"><span>Re-sync every (minutes)</span>
+          <input type="number" min="1" max="1440" data-path="timeSource.ntpIntervalMin" data-type="number" data-event="change">
+        </label>
+        <label class="f"><span>&nbsp;</span><button id="btnSync" class="primary">Sync now</button></label>
+      </div>
+    </fieldset>
+
+    <fieldset id="fsManual">
+      <legend>Manual</legend>
+      <div class="grid two">
+        <label class="f"><span>Set clock to (date &amp; time)</span>
+          <div class="row"><input type="datetime-local" id="manualDt" step="1"><button id="btnSetDt" class="primary">Set</button></div>
+        </label>
+        <label class="f"><span>Set time of day only (HH:MM:SS)</span>
+          <div class="row"><input type="time" id="manualTod" step="1"><button id="btnSetTod" class="primary">Set</button></div>
+        </label>
+        <label class="f"><span>Nudge</span>
+          <div class="row">
+            <button data-nudge="-60000">−1 m</button><button data-nudge="-1000">−1 s</button><button data-nudge="-100">−0.1 s</button>
+            <button data-nudge="100">+0.1 s</button><button data-nudge="1000">+1 s</button><button data-nudge="60000">+1 m</button>
+          </div>
+        </label>
+        <label class="f"><span>&nbsp;</span><button id="btnUseBrowser">Set to this browser's time</button></label>
+      </div>
+    </fieldset>
+
+    <dl class="status" style="margin:10px 0 0">
+      <dt>Source</dt><dd id="stMode">–</dd>
+      <dt>Offset from PC clock</dt><dd id="stOffset" class="val">–</dd>
+      <dt>Last NTP sync</dt><dd id="stSync">–</dd>
+      <dt>Status</dt><dd id="stErr">–</dd>
+    </dl>
+  </section>
+
+  <!-- ---------------- Clock ---------------- -->
+  <section class="card">
+    <h2>Time of day clock
+      <label class="chk"><input type="checkbox" data-path="clock.visible" data-type="bool"> Visible</label>
+    </h2>
+    <div class="grid">
+      <label class="f"><span>Format</span>
+        <select data-path="clock.format"><option value="24">24-hour</option><option value="12">12-hour</option></select>
+      </label>
+      <label class="f"><span>Time zone</span>
+        <input type="text" list="tzList" data-path="clock.timezone" data-event="change" placeholder="local">
+        <datalist id="tzList">
+          <option value="local"><option value="UTC">
+          <option value="America/New_York"><option value="America/Chicago"><option value="America/Denver"><option value="America/Los_Angeles">
+          <option value="America/Anchorage"><option value="Pacific/Honolulu"><option value="America/Toronto"><option value="America/Mexico_City">
+          <option value="Europe/London"><option value="Europe/Paris"><option value="Europe/Berlin"><option value="Asia/Tokyo"><option value="Australia/Sydney">
+        </datalist>
+      </label>
+      <label class="chk"><input type="checkbox" data-path="clock.showSeconds" data-type="bool"> Show seconds</label>
+      <label class="chk"><input type="checkbox" data-path="clock.showAmPm" data-type="bool"> Show AM/PM (12-hour)</label>
+      <label class="chk"><input type="checkbox" data-path="clock.leadingZero" data-type="bool"> Leading zero on hour</label>
+    </div>
+    <details open>
+      <summary>Appearance &amp; position</summary>
+      <div class="grid" data-appearance="clock"></div>
+    </details>
+  </section>
+
+  <!-- ---------------- Countdown ---------------- -->
+  <section class="card">
+    <h2>Countdown
+      <label class="chk"><input type="checkbox" data-path="countdown.enabled" data-type="bool"> Show on output</label>
+    </h2>
+    <div class="row" style="margin-bottom:12px">
+      <div class="remaining" id="cdRemaining">00:00</div>
+      <button id="btnCdStart" class="good big">Start</button>
+      <button id="btnCdPause" class="warnb big">Pause</button>
+      <button id="btnCdReset" class="big">Reset</button>
+    </div>
+    <div class="grid">
+      <label class="f"><span>Mode</span>
+        <select data-path="countdown.mode"><option value="duration">Count down a duration</option><option value="target">Count down to a time</option></select>
+      </label>
+      <label class="f" id="fDuration"><span>Duration (HH:MM:SS)</span>
+        <input type="text" id="cdDuration" placeholder="00:10:00" class="mono">
+      </label>
+      <label class="f" id="fTarget"><span>Target date &amp; time</span>
+        <input type="datetime-local" id="cdTarget" step="1">
+      </label>
+      <label class="f"><span>Label above timer (optional)</span>
+        <input type="text" data-path="countdown.label" data-event="input" placeholder="e.g. DOORS OPEN IN">
+      </label>
+      <label class="f"><span>Hours digits</span>
+        <select data-path="countdown.showHours"><option value="auto">Only when ≥ 1 hour</option><option value="always">Always</option><option value="never">Never</option></select>
+      </label>
+      <label class="f"><span>When it reaches zero</span>
+        <select data-path="countdown.overrun"><option value="stop">Hold at 00:00</option><option value="negative">Keep counting (−MM:SS)</option></select>
+      </label>
+      <label class="f"><span>Warning when under (seconds)</span>
+        <input type="number" min="0" data-path="countdown.warnSeconds" data-type="number" data-event="change">
+      </label>
+      <label class="f"><span>Warning colour</span><input type="color" data-path="countdown.warnColor" data-event="input"></label>
+      <label class="f"><span>Colour at zero</span><input type="color" data-path="countdown.zeroColor" data-event="input"></label>
+      <label class="chk"><input type="checkbox" data-path="countdown.flashAtZero" data-type="bool"> Flash at zero</label>
+    </div>
+    <details open>
+      <summary>Appearance &amp; position</summary>
+      <div class="grid" data-appearance="countdown"></div>
+    </details>
+  </section>
+
+  <section class="card">
+    <h2>Maintenance</h2>
+    <div class="row">
+      <button id="btnReset" class="danger">Reset all settings to defaults</button>
+    </div>
+  </section>
+
+</div>
+
+<!-- ---------------- Side: preview + status ---------------- -->
+<div class="side">
+  <section class="card" style="margin:0">
+    <h2>Server time <span class="sub" id="stPc"></span></h2>
+    <div class="bigtime" id="bigTime">--:--:--</div>
+    <div class="sub" id="bigDate"></div>
+  </section>
+
+  <section class="card" style="margin:0">
+    <h2>Preview
+      <select id="previewBg" style="width:auto">
+        <option value="checker">Checkerboard</option><option value="black">Black</option><option value="green">Green</option>
+        <option value="blue">Blue</option><option value="white">White</option>
+      </select>
+    </h2>
+    <div class="preview bg-checker" id="preview"><iframe src="/view" title="Clock preview"></iframe></div>
+    <div class="sub" style="margin-top:8px">Preview is the real output page scaled down. Sizes in <b>vw</b> scale with the output resolution; <b>px</b> sizes do not.</div>
+  </section>
+
+  <section class="card" style="margin:0">
+    <h2>Output URLs</h2>
+    <div class="urls" id="urls"></div>
+    <div class="sub" style="margin-top:8px">Open the output URL in a full-screen browser or an OBS/vMix browser source. The page background is transparent.</div>
+  </section>
+</div>
+</div>
+
+<div class="toast" id="toast"></div>
+
+<script>
+(function () {
+  'use strict';
+
+  const $ = (s, el) => (el || document).querySelector(s);
+  const $$ = (s, el) => Array.from((el || document).querySelectorAll(s));
+
+  let settings = null;
+  let status = null;
+  let serverOffset = 0; // server production time - this browser's Date.now()
+  let ws = null;
+
+  // ------------------------------------------------------------------
+  // Appearance field templates (shared by clock and countdown)
+  // ------------------------------------------------------------------
+
+  const FONTS = [
+    'Arial, Helvetica, sans-serif', 'Helvetica, Arial, sans-serif', '"Segoe UI", sans-serif', 'Verdana, sans-serif', 'Tahoma, sans-serif',
+    '"Trebuchet MS", sans-serif', 'Impact, sans-serif', '"Arial Black", sans-serif', 'Georgia, serif', '"Times New Roman", serif',
+    'Consolas, monospace', '"Courier New", monospace', '"Lucida Console", monospace', '"DS-Digital", monospace', '"Digital-7", monospace',
+  ];
+
+  function appearanceHtml(p) {
+    return `
+      <label class="f"><span>Font</span>
+        <input type="text" list="fontList" data-path="${p}.fontFamily" data-event="change">
+      </label>
+      <label class="f"><span>Google Font name (optional, needs internet)</span>
+        <input type="text" data-path="${p}.googleFont" data-event="change" placeholder="e.g. Oswald, Roboto Mono, Orbitron">
+      </label>
+      <label class="f"><span>Size <b class="val" data-show="${p}.fontSize"></b></span>
+        <div class="row">
+          <input type="range" min="1" max="60" step="0.5" data-path="${p}.fontSize" data-type="number" data-event="input" data-range-for="${p}.fontSize">
+          <input type="number" min="1" step="0.5" style="width:80px;flex:0 0 80px" data-path="${p}.fontSize" data-type="number" data-event="change">
+          <select data-path="${p}.fontUnit" style="width:70px;flex:0 0 70px"><option value="vw">vw</option><option value="px">px</option></select>
+        </div>
+      </label>
+      <label class="f"><span>Weight</span>
+        <select data-path="${p}.fontWeight" data-type="number">
+          <option value="300">Light</option><option value="400">Regular</option><option value="500">Medium</option>
+          <option value="600">Semi-bold</option><option value="700">Bold</option><option value="800">Extra-bold</option><option value="900">Black</option>
+        </select>
+      </label>
+      <label class="f"><span>Colour</span><input type="color" data-path="${p}.color" data-event="input"></label>
+      <label class="f"><span>Outline colour</span><input type="color" data-path="${p}.outlineColor" data-event="input"></label>
+      <label class="f"><span>Outline width (px) <b class="val" data-show="${p}.outlineWidth"></b></span>
+        <input type="range" min="0" max="12" step="0.5" data-path="${p}.outlineWidth" data-type="number" data-event="input">
+      </label>
+      <label class="f"><span>Letter spacing <b class="val" data-show="${p}.letterSpacing"></b></span>
+        <input type="range" min="-10" max="40" step="1" data-path="${p}.letterSpacing" data-type="number" data-event="input">
+      </label>
+      <label class="chk"><input type="checkbox" data-path="${p}.shadow" data-type="bool"> Drop shadow</label>
+      <label class="chk"><input type="checkbox" data-path="${p}.tabularDigits" data-type="bool"> Fixed-width digits</label>
+      <label class="f"><span>Horizontal position % <b class="val" data-show="${p}.x"></b></span>
+        <input type="range" min="0" max="100" step="0.5" data-path="${p}.x" data-type="number" data-event="input">
+      </label>
+      <label class="f"><span>Vertical position % <b class="val" data-show="${p}.y"></b></span>
+        <input type="range" min="0" max="100" step="0.5" data-path="${p}.y" data-type="number" data-event="input">
+      </label>
+      <label class="f"><span>Anchor</span>
+        <select data-path="${p}.align"><option value="left">Left edge at X</option><option value="center">Centred on X</option><option value="right">Right edge at X</option></select>
+      </label>`;
+  }
+
+  $$('[data-appearance]').forEach((el) => { el.innerHTML = appearanceHtml(el.dataset.appearance); });
+  const dl = document.createElement('datalist');
+  dl.id = 'fontList';
+  dl.innerHTML = FONTS.map((f) => `<option value='${f.replace(/'/g, '&#39;')}'>`).join('');
+  document.body.appendChild(dl);
+
+  // ------------------------------------------------------------------
+  // Helpers
+  // ------------------------------------------------------------------
+
+  function getPath(obj, path) {
+    return path.split('.').reduce((o, k) => (o == null ? undefined : o[k]), obj);
+  }
+
+  function nest(path, value) {
+    const out = {};
+    let cur = out;
+    const keys = path.split('.');
+    keys.forEach((k, i) => { cur[k] = i === keys.length - 1 ? value : {}; cur = cur[k]; });
+    return out;
+  }
+
+  function toast(msg) {
+    const t = $('#toast');
+    t.textContent = msg;
+    t.style.display = 'block';
+    clearTimeout(toast._t);
+    toast._t = setTimeout(() => { t.style.display = 'none'; }, 4000);
+  }
+
+  async function api(method, url, body) {
+    try {
+      const r = await fetch(url, { method, headers: { 'Content-Type': 'application/json' }, body: body ? JSON.stringify(body) : undefined });
+      if (!r.ok) {
+        const e = await r.json().catch(() => ({}));
+        throw new Error(e.error || r.statusText);
+      }
+      return await r.json();
+    } catch (err) {
+      toast('Error: ' + err.message);
+      throw err;
+    }
+  }
+
+  const patch = (obj) => api('PATCH', '/api/settings', obj);
+
+  function pad(n) { return (n < 10 ? '0' : '') + n; }
+
+  function msToHms(ms) {
+    const total = Math.max(0, Math.round(ms / 1000));
+    return pad(Math.floor(total / 3600)) + ':' + pad(Math.floor((total % 3600) / 60)) + ':' + pad(total % 60);
+  }
+
+  function hmsToMs(str) {
+    const parts = String(str).trim().split(':').map(Number);
+    if (parts.some((n) => !Number.isFinite(n) || n < 0)) return null;
+    let s = 0;
+    if (parts.length === 3) s = parts[0] * 3600 + parts[1] * 60 + parts[2];
+    else if (parts.length === 2) s = parts[0] * 60 + parts[1];
+    else if (parts.length === 1) s = parts[0] * 60; // a bare number means minutes
+    else return null;
+    return s * 1000;
+  }
+
+  function toLocalInput(epochMs) {
+    if (!epochMs) return '';
+    const d = new Date(epochMs);
+    return d.getFullYear() + '-' + pad(d.getMonth() + 1) + '-' + pad(d.getDate()) + 'T' + pad(d.getHours()) + ':' + pad(d.getMinutes()) + ':' + pad(d.getSeconds());
+  }
+
+  function formatRemaining(ms, showHours) {
+    const neg = ms < 0;
+    const total = neg ? Math.floor(-ms / 1000) : Math.ceil(ms / 1000);
+    const h = Math.floor(total / 3600), m = Math.floor((total % 3600) / 60), s = total % 60;
+    const useHours = showHours === 'always' || (showHours === 'auto' && h > 0);
+    return (neg ? '−' : '') + (useHours ? h + ':' + pad(m) + ':' + pad(s) : pad(m) + ':' + pad(s));
+  }
+
+  // ------------------------------------------------------------------
+  // Bind inputs -> settings
+  // ------------------------------------------------------------------
+
+  function readInput(el) {
+    const type = el.dataset.type;
+    if (el.type === 'checkbox') return !!el.checked;
+    if (type === 'number') return Number(el.value);
+    if (type === 'bool') return el.value === 'true';
+    return el.value;
+  }
+
+  const debounces = new Map();
+
+  $$('[data-path]').forEach((el) => {
+    const path = el.dataset.path;
+    const evName = el.dataset.event || 'change';
+    const handler = () => {
+      if (el.type === 'radio' && !el.checked) return;
+      const value = readInput(el);
+      // Keep paired controls (slider + number box) and labels in step immediately.
+      $$(`[data-path="${path}"]`).forEach((other) => { if (other !== el && other.type !== 'radio') other.value = value; });
+      $$(`[data-show="${path}"]`).forEach((s) => { s.textContent = value; });
+      clearTimeout(debounces.get(path));
+      debounces.set(path, setTimeout(() => patch(nest(path, value)), evName === 'input' ? 120 : 0));
+    };
+    el.addEventListener(evName, handler);
+    if (evName === 'input') el.addEventListener('change', handler);
+  });
+
+  function fillForm() {
+    if (!settings) return;
+    const active = document.activeElement;
+    $$('[data-path]').forEach((el) => {
+      if (el === active && el.type !== 'checkbox' && el.type !== 'radio' && el.tagName !== 'SELECT') return;
+      const v = getPath(settings, el.dataset.path);
+      if (v === undefined) return;
+      if (el.type === 'checkbox') el.checked = !!v;
+      else if (el.type === 'radio') el.checked = String(v) === el.value;
+      else el.value = v;
+    });
+    $$('[data-show]').forEach((s) => { s.textContent = getPath(settings, s.dataset.show); });
+
+    const cd = settings.countdown;
+    if (active !== $('#cdDuration')) $('#cdDuration').value = msToHms(cd.durationMs);
+    if (active !== $('#cdTarget')) $('#cdTarget').value = toLocalInput(cd.targetEpochMs);
+    $('#fDuration').style.display = cd.mode === 'duration' ? '' : 'none';
+    $('#fTarget').style.display = cd.mode === 'target' ? '' : 'none';
+    $('#btnCdStart').disabled = cd.mode === 'target' || cd.running;
+    $('#btnCdPause').disabled = cd.mode === 'target' || !cd.running;
+
+    const mode = settings.timeSource.mode;
+    $('#fsNtp').disabled = mode !== 'ntp';
+    $('#fsManual').disabled = mode !== 'manual';
+  }
+
+  // Countdown duration / target
+  $('#cdDuration').addEventListener('change', (e) => {
+    const ms = hmsToMs(e.target.value);
+    if (ms === null) { toast('Duration must look like HH:MM:SS or MM:SS'); fillForm(); return; }
+    patch({ countdown: { durationMs: ms } });
+  });
+  $('#cdTarget').addEventListener('change', (e) => {
+    const d = new Date(e.target.value);
+    if (Number.isNaN(d.getTime())) return;
+    patch({ countdown: { targetEpochMs: d.getTime() } });
+  });
+  $('#btnCdStart').addEventListener('click', () => api('POST', '/api/countdown/start'));
+  $('#btnCdPause').addEventListener('click', () => api('POST', '/api/countdown/pause'));
+  $('#btnCdReset').addEventListener('click', () => api('POST', '/api/countdown/reset'));
+
+  // Time source actions
+  $('#btnSync').addEventListener('click', async () => {
+    $('#btnSync').disabled = true;
+    try { await api('POST', '/api/time/sync'); } finally { $('#btnSync').disabled = false; }
+  });
+  $('#btnSetDt').addEventListener('click', () => {
+    const d = new Date($('#manualDt').value);
+    if (Number.isNaN(d.getTime())) { toast('Pick a date and time first'); return; }
+    api('POST', '/api/time/set', { epochMs: d.getTime() });
+  });
+  $('#btnSetTod').addEventListener('click', () => {
+    const v = $('#manualTod').value;
+    if (!v) { toast('Enter a time first'); return; }
+    // Build the epoch in this browser's local day so the server's zone does not matter.
+    const [h, m, s] = v.split(':').map(Number);
+    const d = new Date();
+    d.setHours(h, m, s || 0, 0);
+    api('POST', '/api/time/set', { epochMs: d.getTime() });
+  });
+  $('#btnUseBrowser').addEventListener('click', () => api('POST', '/api/time/set', { epochMs: Date.now() }));
+  $$('[data-nudge]').forEach((b) => b.addEventListener('click', () => api('POST', '/api/time/nudge', { deltaMs: Number(b.dataset.nudge) })));
+
+  $('#btnReset').addEventListener('click', async () => {
+    if (!$('#btnReset').dataset.armed) {
+      $('#btnReset').dataset.armed = '1';
+      $('#btnReset').textContent = 'Click again to confirm reset';
+      setTimeout(() => { delete $('#btnReset').dataset.armed; $('#btnReset').textContent = 'Reset all settings to defaults'; }, 4000);
+      return;
+    }
+    delete $('#btnReset').dataset.armed;
+    $('#btnReset').textContent = 'Reset all settings to defaults';
+    await api('POST', '/api/settings/reset');
+  });
+
+  // Preview background
+  $('#previewBg').addEventListener('change', (e) => {
+    $('#preview').className = 'preview bg-' + e.target.value;
+    try { localStorage.setItem('pc-preview-bg', e.target.value); } catch (_) {}
+  });
+  try {
+    const saved = localStorage.getItem('pc-preview-bg');
+    if (saved) { $('#previewBg').value = saved; $('#preview').className = 'preview bg-' + saved; }
+  } catch (_) {}
+
+  // ------------------------------------------------------------------
+  // Status rendering
+  // ------------------------------------------------------------------
+
+  function renderStatus() {
+    if (!status) return;
+    const modeNames = { system: "This PC's clock", ntp: 'NTP: ' + (status.ntpHost || settings?.timeSource.ntpHost || ''), manual: 'Manual' };
+    $('#stMode').textContent = modeNames[status.mode] || status.mode;
+    const off = status.offsetMs || 0;
+    $('#stOffset').textContent = (off >= 0 ? '+' : '') + off + ' ms';
+    $('#stSync').textContent = status.lastSyncAt
+      ? new Date(status.lastSyncAt).toLocaleTimeString() + (status.lastRttMs != null ? ' (round trip ' + status.lastRttMs + ' ms)' : '')
+      : 'never';
+    const err = $('#stErr');
+    if (status.syncing) { err.textContent = 'Syncing…'; err.className = ''; }
+    else if (status.lastError) { err.textContent = status.lastError; err.className = 'err'; }
+    else { err.textContent = 'OK'; err.className = 'ok'; }
+    $('#clientCount').textContent = status.clients + (status.clients === 1 ? ' connection' : ' connections');
+
+    const urls = $('#urls');
+    const list = [{ name: 'this PC', address: 'localhost' }].concat(status.addresses || []);
+    urls.innerHTML = list.map((a) => {
+      const base = 'http://' + a.address + ':' + status.port;
+      return `<div><b>${a.name}</b>: output <a href="${base}/view" target="_blank">${base}/view</a> · control <a href="${base}/control" target="_blank">${base}/control</a></div>`;
+    }).join('');
+  }
+
+  function tick() {
+    if (settings) {
+      const t = Date.now() + serverOffset;
+      const d = new Date(t);
+      $('#bigTime').textContent = pad(d.getHours()) + ':' + pad(d.getMinutes()) + ':' + pad(d.getSeconds());
+      $('#bigDate').textContent = d.toDateString() + (settings.clock.timezone !== 'local' ? '  ·  output shows ' + settings.clock.timezone : '');
+      $('#stPc').textContent = serverOffset ? '(PC clock ' + (serverOffset > 0 ? '−' : '+') + Math.abs(Math.round(serverOffset)) + ' ms)' : '';
+
+      const cd = settings.countdown;
+      let remaining;
+      if (cd.mode === 'target') remaining = (cd.targetEpochMs || 0) - t;
+      else if (cd.running) remaining = cd.endAt - t;
+      else remaining = cd.remainingMs;
+      if (remaining <= 0 && cd.overrun !== 'negative') remaining = 0;
+      const el = $('#cdRemaining');
+      el.textContent = formatRemaining(remaining, cd.showHours);
+      el.style.color = remaining <= 0 ? cd.zeroColor : (cd.warnSeconds > 0 && remaining <= cd.warnSeconds * 1000 ? cd.warnColor : '');
+    }
+    requestAnimationFrame(tick);
+  }
+  requestAnimationFrame(tick);
+
+  // ------------------------------------------------------------------
+  // WebSocket
+  // ------------------------------------------------------------------
+
+  function connect() {
+    const proto = location.protocol === 'https:' ? 'wss' : 'ws';
+    ws = new WebSocket(proto + '://' + location.host + '/ws');
+    ws.onopen = () => { $('#connDot').classList.add('on'); };
+    ws.onmessage = (ev) => {
+      let msg;
+      try { msg = JSON.parse(ev.data); } catch (_) { return; }
+      if (msg.type === 'settings') { settings = msg.settings; fillForm(); renderStatus(); }
+      else if (msg.type === 'status') { status = msg.status; serverOffset = status.serverNow - Date.now(); renderStatus(); }
+    };
+    ws.onclose = () => { $('#connDot').classList.remove('on'); setTimeout(connect, 1500); };
+    ws.onerror = () => { try { ws.close(); } catch (_) {} };
+  }
+  connect();
+})();
+</script>
+</body>
+</html>

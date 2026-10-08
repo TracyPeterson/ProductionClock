@@ -1,0 +1,83 @@
+# Builds single-file executables and attaches them to a GitHub Release
+# whenever a version tag is pushed, e.g.
+#
+#   git tag v1.0.0
+#   git push origin v1.0.0
+#
+# It can also be run by hand from the Actions tab (workflow_dispatch), which
+# builds the binaries and keeps them as workflow artifacts without a release.
+
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+
+      - run: npm ci
+
+      - name: Syntax check
+        run: node --check server.js
+
+      - name: Build executables
+        run: npm run build
+
+      - name: Rename outputs
+        run: |
+          cd dist
+          ls -la
+          mv production-clock-win-x64.exe   ProductionClock-windows-x64.exe
+          mv production-clock-macos-x64     ProductionClock-macos-intel
+          mv production-clock-macos-arm64   ProductionClock-macos-apple-silicon
+          mv production-clock-linux-x64     ProductionClock-linux-x64
+          chmod +x ProductionClock-macos-* ProductionClock-linux-*
+          ls -la
+
+      - name: Upload build artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: production-clock-binaries
+          path: dist/*
+
+      - name: Create GitHub Release
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: dist/*
+          generate_release_notes: true
+          body: |
+            ## Download and run
+
+            | Platform | File |
+            | --- | --- |
+            | Windows | `ProductionClock-windows-x64.exe` |
+            | macOS (Apple Silicon) | `ProductionClock-macos-apple-silicon` |
+            | macOS (Intel) | `ProductionClock-macos-intel` |
+            | Linux | `ProductionClock-linux-x64` |
+
+            No installation needed. Put the file in a folder of its own and run it.
+            The control panel opens at http://localhost:3000/control and the clock
+            output is at http://localhost:3000/view. Settings are saved to a
+            `settings.json` file next to the executable.
+
+            **Windows:** SmartScreen may warn because the file is not code-signed.
+            Click *More info* then *Run anyway*. Allow it through Windows Firewall
+            when asked so other machines can reach the clock output.
+
+            **macOS / Linux:** mark the file executable first: `chmod +x ProductionClock-*`.
+            On macOS, right-click the file and choose *Open* the first time to bypass Gatekeeper.

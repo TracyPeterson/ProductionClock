@@ -1,0 +1,268 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Production Clock</title>
+<style>
+  html, body {
+    margin: 0;
+    padding: 0;
+    width: 100%;
+    height: 100%;
+    background: transparent !important;
+    overflow: hidden;
+    cursor: none;
+    user-select: none;
+  }
+  .item {
+    position: absolute;
+    white-space: nowrap;
+    line-height: 1;
+    display: none;
+  }
+  .item.on { display: block; }
+  .item .lbl {
+    display: block;
+    font-size: 0.35em;
+    letter-spacing: 0.05em;
+    margin-bottom: 0.15em;
+    opacity: 0.9;
+  }
+  .ampm {
+    font-size: 0.4em;
+    margin-left: 0.25em;
+    vertical-align: baseline;
+  }
+  .tabular { font-variant-numeric: tabular-nums; }
+  .hidden { visibility: hidden; }
+</style>
+</head>
+<body>
+  <div id="clock" class="item"></div>
+  <div id="countdown" class="item"></div>
+
+<script>
+(function () {
+  'use strict';
+
+  const clockEl = document.getElementById('clock');
+  const cdEl = document.getElementById('countdown');
+
+  let settings = null;
+  let offsetMs = 0;            // server production time - this PC's Date.now()
+  let samples = [];            // recent {off, rtt} sync samples
+  let ws = null;
+  let pingTimer = null;
+  const loadedFonts = new Set();
+
+  // ---------------- WebSocket + time sync ----------------
+
+  function connect() {
+    const proto = location.protocol === 'https:' ? 'wss' : 'ws';
+    ws = new WebSocket(proto + '://' + location.host + '/ws');
+
+    ws.onopen = () => {
+      samples = [];
+      // Burst of pings to get a good initial offset, then one every 20 s.
+      let n = 0;
+      const burst = setInterval(() => {
+        sendPing();
+        if (++n >= 6) clearInterval(burst);
+      }, 150);
+      clearInterval(pingTimer);
+      pingTimer = setInterval(sendPing, 20000);
+    };
+
+    ws.onmessage = (ev) => {
+      let msg;
+      try { msg = JSON.parse(ev.data); } catch (_) { return; }
+      if (msg.type === 'settings') {
+        settings = msg.settings;
+        applyStyles();
+      } else if (msg.type === 'pong') {
+        const t3 = Date.now();
+        const rtt = (t3 - msg.t0) - (msg.t2 - msg.t1);
+        const off = ((msg.t1 - msg.t0) + (msg.t2 - t3)) / 2;
+        samples.push({ off, rtt });
+        if (samples.length > 10) samples.shift();
+        // Use the offset from the sample with the lowest round-trip time.
+        const best = samples.reduce((a, b) => (b.rtt < a.rtt ? b : a));
+        offsetMs = best.off;
+      }
+    };
+
+    ws.onclose = () => {
+      clearInterval(pingTimer);
+      setTimeout(connect, 1500);
+    };
+    ws.onerror = () => { try { ws.close(); } catch (_) {} };
+  }
+
+  function sendPing() {
+    if (ws && ws.readyState === WebSocket.OPEN) {
+      ws.send(JSON.stringify({ type: 'ping', t0: Date.now() }));
+    }
+  }
+
+  function now() { return Date.now() + offsetMs; }
+
+  // ---------------- Styling ----------------
+
+  function ensureGoogleFont(name) {
+    if (!name || loadedFonts.has(name)) return;
+    loadedFonts.add(name);
+    const link = document.createElement('link');
+    link.rel = 'stylesheet';
+    link.href = 'https://fonts.googleapis.com/css2?family=' +
+      encodeURIComponent(name).replace(/%20/g, '+') + ':wght@300;400;500;600;700;800;900&display=swap';
+    document.head.appendChild(link);
+  }
+
+  function styleItem(el, s) {
+    ensureGoogleFont(s.googleFont);
+    const family = s.googleFont ? '"' + s.googleFont + '", ' + (s.fontFamily || 'sans-serif') : (s.fontFamily || 'sans-serif');
+    el.style.fontFamily = family;
+    el.style.fontSize = (Number(s.fontSize) || 10) + (s.fontUnit === 'px' ? 'px' : 'vw');
+    el.style.fontWeight = String(s.fontWeight || 700);
+    el.style.color = s.color || '#fff';
+    el.style.letterSpacing = ((Number(s.letterSpacing) || 0) / 100) + 'em';
+    el.style.left = (Number(s.x) || 0) + '%';
+    el.style.top = (Number(s.y) || 0) + '%';
+    el.style.textAlign = s.align || 'center';
+    const tx = s.align === 'left' ? '0%' : s.align === 'right' ? '-100%' : '-50%';
+    el.style.transform = 'translate(' + tx + ', -50%)';
+    const ow = Number(s.outlineWidth) || 0;
+    el.style.webkitTextStroke = ow > 0 ? ow + 'px ' + (s.outlineColor || '#000') : '';
+    el.style.paintOrder = 'stroke fill';
+    el.style.textShadow = s.shadow ? '0 0.04em 0.12em rgba(0,0,0,0.8), 0 0 0.02em rgba(0,0,0,0.9)' : 'none';
+    el.classList.toggle('tabular', !!s.tabularDigits);
+  }
+
+  function applyStyles() {
+    if (!settings) return;
+    styleItem(clockEl, settings.clock);
+    styleItem(cdEl, settings.countdown);
+    clockEl.classList.toggle('on', !!settings.clock.visible);
+    cdEl.classList.toggle('on', !!settings.countdown.enabled);
+    formatterCache = null;
+    lastCdColor = '';
+  }
+
+  // ---------------- Clock formatting ----------------
+
+  let formatterCache = null;
+
+  function getFormatter() {
+    if (formatterCache) return formatterCache;
+    const c = settings.clock;
+    const opts = {
+      hour: '2-digit',
+      minute: '2-digit',
+      hourCycle: c.format === '12' ? 'h12' : 'h23',
+    };
+    if (c.showSeconds) opts.second = '2-digit';
+    if (c.timezone && c.timezone !== 'local') opts.timeZone = c.timezone;
+    try {
+      formatterCache = new Intl.DateTimeFormat('en-US', opts);
+    } catch (_) {
+      delete opts.timeZone;
+      formatterCache = new Intl.DateTimeFormat('en-US', opts);
+    }
+    return formatterCache;
+  }
+
+  let lastClockText = '';
+
+  function renderClock(t) {
+    if (!settings.clock.visible) return;
+    const c = settings.clock;
+    const parts = getFormatter().formatToParts(new Date(t));
+    let h = '', m = '', s = '', ampm = '';
+    for (const p of parts) {
+      if (p.type === 'hour') h = p.value;
+      else if (p.type === 'minute') m = p.value;
+      else if (p.type === 'second') s = p.value;
+      else if (p.type === 'dayPeriod') ampm = p.value;
+    }
+    if (!c.leadingZero) h = String(Number(h));
+    let html = h + ':' + m + (c.showSeconds ? ':' + s : '');
+    if (c.format === '12' && c.showAmPm) html += '<span class="ampm">' + ampm + '</span>';
+    if (html !== lastClockText) {
+      clockEl.innerHTML = html;
+      lastClockText = html;
+    }
+  }
+
+  // ---------------- Countdown ----------------
+
+  function pad(n) { return (n < 10 ? '0' : '') + n; }
+
+  function formatRemaining(ms, showHours) {
+    const neg = ms < 0;
+    const total = neg ? Math.floor(-ms / 1000) : Math.ceil(ms / 1000);
+    const h = Math.floor(total / 3600);
+    const m = Math.floor((total % 3600) / 60);
+    const s = total % 60;
+    const useHours = showHours === 'always' || (showHours === 'auto' && h > 0);
+    const body = useHours ? h + ':' + pad(m) + ':' + pad(s) : pad(m) + ':' + pad(s);
+    return (neg ? '-' : '') + body;
+  }
+
+  let lastCdText = '';
+  let lastCdColor = '';
+
+  function renderCountdown(t) {
+    const cd = settings.countdown;
+    if (!cd.enabled) return;
+
+    let remaining;
+    if (cd.mode === 'target') remaining = (Number(cd.targetEpochMs) || 0) - t;
+    else if (cd.running) remaining = (Number(cd.endAt) || 0) - t;
+    else remaining = Number(cd.remainingMs) || 0;
+
+    const atZero = remaining <= 0;
+    if (atZero && cd.overrun !== 'negative') remaining = 0;
+
+    let color = cd.color || '#fff';
+    if (atZero) color = cd.zeroColor || color;
+    else if (cd.warnSeconds > 0 && remaining <= cd.warnSeconds * 1000) color = cd.warnColor || color;
+
+    const text = formatRemaining(remaining, cd.showHours);
+    const html = (cd.label ? '<span class="lbl">' + escapeHtml(cd.label) + '</span>' : '') + text;
+    if (html !== lastCdText) {
+      cdEl.innerHTML = html;
+      lastCdText = html;
+    }
+    if (color !== lastCdColor) {
+      cdEl.style.color = color;
+      lastCdColor = color;
+    }
+    // Flash at 2 Hz when the countdown has expired.
+    const flash = atZero && cd.flashAtZero && Math.floor(t / 500) % 2 === 1;
+    cdEl.classList.toggle('hidden', flash);
+  }
+
+  function escapeHtml(s) {
+    return String(s).replace(/[&<>"']/g, function (ch) {
+      return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[ch];
+    });
+  }
+
+  // ---------------- Render loop ----------------
+
+  function tick() {
+    if (settings) {
+      const t = now();
+      renderClock(t);
+      renderCountdown(t);
+    }
+    requestAnimationFrame(tick);
+  }
+
+  connect();
+  requestAnimationFrame(tick);
+})();
+</script>
+</body>
+</html>
